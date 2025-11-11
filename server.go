@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -22,7 +21,6 @@ var Tick int
 var MembershipList sync.Map
 var HyDFSFiles sync.Map
 
-var selfPort int
 var selfHost string
 var selfId string
 
@@ -1147,15 +1145,10 @@ func main() {
 	localAddr := conn.LocalAddr().(*net.UDPAddr)
 	selfHost = localAddr.IP.String()
 
-	// Get self port from cmd line args
-	port := flag.Int("port", 1234, "self port")
-	flag.Parse()
-	selfPort = *port
-
 	// Add self to membership list
 	self := Member{
 		IP:        selfHost,
-		Port:      selfPort,
+		Port:      SelfPort,
 		Timestamp: GetUUID(), // unique
 		Heartbeat: 0,
 		Status:    Alive,
@@ -1164,9 +1157,7 @@ func main() {
 	self.RingID = GetRingId(KeyFor(self))
 	MembershipList.Store(selfId, self)
 
-	// Setup logging
-	logFileName := fmt.Sprintf("machine.%s.%d.log", selfHost, selfPort)
-	f, err := os.OpenFile(logFileName, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	f, err := os.OpenFile("machine.log", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	if err != nil {
 		log.Printf("log file open error: %v", err)
 		return
@@ -1175,7 +1166,7 @@ func main() {
 	log.SetOutput(f)
 
 	// Listen for UDP messages
-	listenAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf(":%d", selfPort))
+	listenAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf(":%d", SelfPort))
 	if err != nil {
 		log.Printf("resolve listenAddr error: %v", err)
 		return
@@ -1189,7 +1180,7 @@ func main() {
 	go listenUDP()
 
 	// Listen for TCP messages
-	tcpLn, err := net.Listen("tcp", fmt.Sprintf(":%d", selfPort))
+	tcpLn, err := net.Listen("tcp", fmt.Sprintf(":%d", SelfPort))
 	if err != nil {
 		log.Printf("tcp error: %v", err)
 		return
@@ -1198,7 +1189,7 @@ func main() {
 	go listenTCP(tcpLn)
 
 	// Send join to introducer iff we are not the introducer
-	if !(selfHost == IntroducerHost && selfPort == IntroducerPort) {
+	if !(selfHost == IntroducerHost && SelfPort == IntroducerPort) {
 		introducerAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", IntroducerHost, IntroducerPort))
 		if err != nil {
 			log.Printf("resolve introducerAddr error: %v", err)
