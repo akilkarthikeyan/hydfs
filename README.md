@@ -1,25 +1,38 @@
 # HyDFS
 
-HyDFS is a flat, quorum-replicated distributed file system written in Go.  
-Files are chunked and replicated on 3 ring successors; writes require all 3 ACKs, reads need 1.  
-No directories—filenames are treated as flat keys. Includes tools to inspect replicas and reconcile data after failures.
+## HyDFS Overview
+
+HyDFS is a distributed file system built on top of a gossip-based failure detector (gossip round = 1s, K = 3, T<sub>fail</sub> = 5s, T<sub>cleanup</sub> = 5s). It uses **consistent hashing (SHA1, 64-bit)** to organize nodes in a ring of size `2^64` and has a **replication factor of 3** to ensure fault tolerance, allowing up to **two simultaneous node failures**.
+
+### Communication & Storage
+- **UDP** is used for control messages, while **TCP** (with Base64-encoded file data) is used to handle file transfers.  
+- Each file is stored as **chunks**, each with a **unique ID** shared across replicas.  
+- File data is stored under `/hydfs` in the local file system, and nodes maintain metadata about files and chunk ordering.
+
+### Safety, re-replication and rebalancing
+- **Write quorum = 3**, **read quorum = 1** ensures that correct data is always seen.  
+- On **node join**, the new node fetches the files it should replicate from its successor.  
+- On **node failure**, successors detect the failure and re-replicate the failed node’s files.
+
+### Liveness
+A **merge thread** runs every 30 seconds to:
+- Enforce consistent chunk order across replicas (using the primary replica’s metadata).
+- Create missing replicas if any are lost.
+- Delete unnecessary replicas.
 
 ## Prerequisites
 
-- Go 1.20+ installed on all VMs
-- SSH access to all 10 course VMs  
-  (`fa25-cs425-9501.cs.illinois.edu … fa25-cs425-9510.cs.illinois.edu`)
-
----
+- Go 1.20+ installed on all machines
+- Make sure to change introducer's address in *types.go* to your introducer's address
 
 ## Running
 
-Run these steps on each VM (make sure introducer i.e VM1 is run first):
+Run these steps on each machine (make sure introducer is run first):
 
 ```bash
 # 1. Clone this repo
-git clone https://gitlab.engr.illinois.edu/akshatg4/g95.git g95
-cd g95/mp3
+git clone https://github.com/akilkarthikeyan/hydfs.git hydfs
+cd hydfs
 
 # 2. Run the code as
 go run .
@@ -35,7 +48,10 @@ go run .
 | `append <localfilename> <HyDFSfilename>` | Append a local file’s contents to an existing HyDFS file. |
 | `get <HyDFSfilename> <localfilename>` | Fetch a file from HyDFS and save locally. |
 | `merge <HyDFSfilename>` | Reconcile one file across replicas. |
-| `ls <HyDFSfilename>` | List all VMs storing a given file and its RingID. |
-| `liststore` | List files stored on this VM. |
-| `getfromreplica <VMaddress> <HyDFSFilename> <localfilename>` | Get a file from a specific replica. |
-| `multiappend <HyDFSfilename> <VMi> <VMj> ... <localfilenamei> <localfilenamej> ...` | Simultaneously append from multiple VMs. |
+| `ls <HyDFSfilename>` | List all nodes storing a given file and its RingID. |
+| `liststore` | List files stored on this node. |
+| `getfromreplica <nodeaddress> <HyDFSFilename> <localfilename>` | Get a file from a specific replica. |
+| `multiappend <HyDFSfilename> <nodei> <nodej> ... <localfilenamei> <localfilenamej> ...` | Simultaneously append from multiple node. |
+
+
+
