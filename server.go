@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -21,6 +22,7 @@ var Tick int
 var MembershipList sync.Map
 var HyDFSFiles sync.Map
 
+var selfPort int
 var selfHost string
 var selfId string
 
@@ -29,11 +31,11 @@ var udpConn *net.UDPConn
 func sendUDP(addr *net.UDPAddr, msg *Message) {
 	data, err := json.Marshal(msg)
 	if err != nil {
-		fmt.Printf("send udp marshal error: %v", err)
+		log.Printf("send udp marshal error: %v", err)
 		return
 	}
 	if _, err := udpConn.WriteToUDP(data, addr); err != nil {
-		fmt.Printf("send udp write error: %v", err)
+		log.Printf("send udp write error: %v", err)
 	}
 }
 
@@ -42,12 +44,12 @@ func listenUDP() {
 	for {
 		n, raddr, err := udpConn.ReadFromUDP(buf)
 		if err != nil {
-			fmt.Printf("listen udp read error: %v", err)
+			log.Printf("listen udp read error: %v", err)
 			continue
 		}
 		var msg Message
 		if err := json.Unmarshal(buf[:n], &msg); err != nil {
-			fmt.Printf("listen udp unmarshal from %v error: %v", raddr, err)
+			log.Printf("listen udp unmarshal from %v error: %v", raddr, err)
 			continue
 		}
 		handleMessage(&msg, nil)
@@ -82,7 +84,7 @@ func listenTCP(ln net.Listener) {
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
-			fmt.Printf("listen tcp accept error: %v", err)
+			log.Printf("listen tcp accept error: %v", err)
 			continue
 		}
 		// Handle each client in a separate goroutine
@@ -101,7 +103,7 @@ func handleTCPClient(conn net.Conn) {
 			if errors.Is(err, io.EOF) {
 				// Connection closed by client, so return
 			} else {
-				fmt.Printf("handle tcp decode from %v error: %v\n", conn.RemoteAddr(), err)
+				log.Printf("handle tcp decode from %v error: %v\n", conn.RemoteAddr(), err)
 			}
 			return
 		}
@@ -163,11 +165,11 @@ func gossip(interval time.Duration) {
 				m.Status = Failed
 				m.LastUpdated = Tick
 				MembershipList.Store(k.(string), m)
-				// fmt.Printf("[FAIL] %s marked failed at tick %d\n", k.(string), tick)
+				// log.Printf("[FAIL] %s marked failed at tick %d\n", k.(string), tick)
 				go handleNodeFail(m, SnapshotMembers(true))
 			} else if m.Status == Failed && elapsed >= Tcleanup {
 				MembershipList.Delete(k.(string))
-				// fmt.Printf("[DELETE] %s removed from membership list at tick %d\n", k.(string), tick)
+				// log.Printf("[DELETE] %s removed from membership list at tick %d\n", k.(string), tick)
 			}
 
 			return true
@@ -183,7 +185,7 @@ func gossip(interval time.Duration) {
 		for _, target := range targets {
 			targetAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", target.IP, target.Port))
 			if err != nil {
-				fmt.Printf("gossip resolve target error: %v", err)
+				log.Printf("gossip resolve target error: %v", err)
 				continue
 			}
 			payloadBytes, _ := json.Marshal(GossipPayload{Members: members})
@@ -206,7 +208,7 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 	case Gossip:
 		var gp GossipPayload
 		if err := json.Unmarshal(msg.Payload, &gp); err != nil {
-			fmt.Printf("gossip payload unmarshal error: %v", err)
+			log.Printf("gossip payload unmarshal error: %v", err)
 			return
 		}
 		mergeMembershipList(gp.Members)
@@ -226,7 +228,7 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 		}
 		senderAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", msg.From.IP, msg.From.Port))
 		if err != nil {
-			fmt.Printf("resolve sender error: %v", err)
+			log.Printf("resolve sender error: %v", err)
 			return
 		}
 		sendUDP(senderAddr, &reply)
@@ -236,7 +238,7 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 	case JoinReply:
 		var gp GossipPayload
 		if err := json.Unmarshal(msg.Payload, &gp); err != nil {
-			fmt.Printf("gossip payload unmarshal error: %v", err)
+			log.Printf("gossip payload unmarshal error: %v", err)
 			return
 		}
 		mergeMembershipList(gp.Members)
@@ -246,7 +248,7 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 		target := GetRingSuccessor(GetRingId(selfId), membershipList)
 		files, err := getFilesFromTarget(target, "", All)
 		if err != nil {
-			fmt.Printf("get files from target error: %v", err)
+			log.Printf("get files from target error: %v", err)
 			return
 		}
 
@@ -259,12 +261,12 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 			for _, chunk := range hyDFSFile.Chunks {
 				data, err := DecodeBase64ToBytes(chunk.DataB64)
 				if err != nil {
-					fmt.Printf("file decode error: %v", err)
+					log.Printf("file decode error: %v", err)
 					return
 				}
 				targetPath := filepath.Join("hydfs", GetHyDFSCompliantFilename(filename)+"_"+chunk.ID)
 				if err := os.WriteFile(targetPath, data, 0644); err != nil {
-					fmt.Printf("failed to write file: %v\n", err)
+					log.Printf("failed to write file: %v\n", err)
 					return
 				}
 				chunks = append(chunks, File{
@@ -284,7 +286,7 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 	case Merge:
 		var mr MergeRequest
 		if err := json.Unmarshal(msg.Payload, &mr); err != nil {
-			fmt.Printf("merge request unmarshal error: %v", err)
+			log.Printf("merge request unmarshal error: %v", err)
 			return
 		}
 		merge(mr.HyDFSFilename, SnapshotMembers(true), mr.MergeType)
@@ -293,7 +295,7 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 	case MultiAppend:
 		var mar MultiAppendRequest
 		if err := json.Unmarshal(msg.Payload, &mar); err != nil {
-			fmt.Printf("multiappend request unmarshal error: %v", err)
+			log.Printf("multiappend request unmarshal error: %v", err)
 			return
 		}
 		createOrAppendHyDFSFile(mar.LocalFilename, mar.HyDFSFilename, false)
@@ -305,12 +307,9 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 
 		var chfr CreateHyDFSFileRequest
 		if err := json.Unmarshal(msg.Payload, &chfr); err != nil {
-			fmt.Printf("file payload unmarshal error: %v", err)
+			log.Printf("file payload unmarshal error: %v", err)
 			return
 		}
-
-		// For the demo
-		fmt.Printf("Received CreateHyDFSFile request for %s\n", chfr.Chunk.Filename)
 
 		f := chfr.Chunk
 
@@ -340,13 +339,13 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 
 		data, err := DecodeBase64ToBytes(f.DataB64)
 		if err != nil {
-			fmt.Printf("file decode error: %v", err)
+			log.Printf("file decode error: %v", err)
 			return
 		}
 
 		targetPath := filepath.Join("hydfs", GetHyDFSCompliantFilename(f.Filename)+"_"+f.ID)
 		if err := os.WriteFile(targetPath, data, 0644); err != nil {
-			fmt.Printf("failed to write file: %v\n", err)
+			log.Printf("failed to write file: %v\n", err)
 			return
 		}
 
@@ -359,9 +358,6 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 			Payload:     payloadBytes,
 		})
 
-		// For the demo
-		fmt.Printf("CreateHyDFSFile operation for %s complete!\n", f.Filename)
-
 	// TCP message
 	case AppendHyDFSFile: // Returns ACK, or NACK if file does not exist
 		v, _ := MembershipList.Load(selfId)
@@ -369,14 +365,11 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 
 		var ahfr AppendHyDFSFileRequest
 		if err := json.Unmarshal(msg.Payload, &ahfr); err != nil {
-			fmt.Printf("file payload unmarshal error: %v", err)
+			log.Printf("file payload unmarshal error: %v", err)
 			return
 		}
 
 		f := ahfr.Chunk
-
-		// For the demo
-		fmt.Printf("Received AppendHyDFSFile request for %s\n", f.Filename)
 
 		w, ok := HyDFSFiles.Load(f.Filename)
 		if !ok {
@@ -400,13 +393,13 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 
 		data, err := DecodeBase64ToBytes(f.DataB64)
 		if err != nil {
-			fmt.Printf("file decode error: %v", err)
+			log.Printf("file decode error: %v", err)
 			return
 		}
 
 		targetPath := filepath.Join("hydfs", GetHyDFSCompliantFilename(f.Filename)+"_"+f.ID)
 		if err := os.WriteFile(targetPath, data, 0644); err != nil {
-			fmt.Printf("failed to write file: %v\n", err)
+			log.Printf("failed to write file: %v\n", err)
 			return
 		}
 
@@ -419,9 +412,6 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 			Payload:     payloadBytes,
 		})
 
-		// For the demo
-		fmt.Printf("AppendHyDFSFile operation for %s complete!\n", f.Filename)
-
 	// TCP message
 	case GetHyDFSFiles: // Returns file payloads if file exists, else NACK; If "All", returns all files with an ACK, If "Primary", returns primary files only, If "Meta", returns metadata only
 		v, _ := MembershipList.Load(selfId)
@@ -429,7 +419,7 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 
 		var ghfr GetHyDFSFilesRequest
 		if err := json.Unmarshal(msg.Payload, &ghfr); err != nil {
-			fmt.Printf("get hydfs file payload unmarshal error: %v", err)
+			log.Printf("get hydfs file payload unmarshal error: %v", err)
 			return
 		}
 
@@ -445,7 +435,7 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 					targetPath := filepath.Join("hydfs", GetHyDFSCompliantFilename(chunk.Filename)+"_"+chunk.ID)
 					data, err := EncodeFileToBase64(targetPath)
 					if err != nil {
-						fmt.Printf("file encode error: %v", err)
+						log.Printf("file encode error: %v", err)
 						return false
 					}
 					chunks = append(chunks, File{
@@ -488,7 +478,7 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 					targetPath := filepath.Join("hydfs", GetHyDFSCompliantFilename(chunk.Filename)+"_"+chunk.ID)
 					data, err := EncodeFileToBase64(targetPath)
 					if err != nil {
-						fmt.Printf("file encode error: %v", err)
+						log.Printf("file encode error: %v", err)
 						return false
 					}
 					chunks = append(chunks, File{
@@ -516,9 +506,6 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 			})
 
 		case One:
-			// For the demo
-			fmt.Printf("Received GetHyDFSFiles request for %s\n", ghfr.Filename)
-
 			filename := ghfr.Filename
 			w, ok := HyDFSFiles.Load(filename)
 			if !ok {
@@ -539,7 +526,7 @@ func handleMessage(msg *Message, encoder *json.Encoder) { // encoder can only be
 				targetPath := filepath.Join("hydfs", GetHyDFSCompliantFilename(chunk.Filename)+"_"+chunk.ID)
 				data, err := EncodeFileToBase64(targetPath)
 				if err != nil {
-					fmt.Printf("file encode error: %v", err)
+					log.Printf("file encode error: %v", err)
 					return
 				}
 				chunks = append(chunks, File{
@@ -591,7 +578,7 @@ func multicastMessage(msg *Message, members map[string]Member) {
 		}
 		targetAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", target.IP, target.Port))
 		if err != nil {
-			fmt.Printf("multicast resolve target error: %v", err)
+			log.Printf("multicast resolve target error: %v", err)
 			continue
 		}
 		sendUDP(targetAddr, msg)
@@ -609,7 +596,7 @@ func createOrAppendHyDFSFile(localfilename string, hyDFSfilename string, create 
 
 	fileContent, err := EncodeFileToBase64(localfilename)
 	if err != nil {
-		fmt.Printf("file encode error: %v", err)
+		log.Printf("file encode error: %v", err)
 		return false
 	}
 
@@ -659,7 +646,7 @@ func createOrAppendHyDFSFile(localfilename string, hyDFSfilename string, create 
 			addr := fmt.Sprintf("%s:%d", t.IP, t.Port)
 			resp, err := sendTCP(addr, &message)
 			if err != nil {
-				// fmt.Printf("send to %s failed: %v\n", addr, err)
+				// log.Printf("send to %s failed: %v\n", addr, err)
 				return
 			}
 			results <- resp
@@ -679,7 +666,7 @@ func createOrAppendHyDFSFile(localfilename string, hyDFSfilename string, create 
 		for _, message := range all {
 			var createHyDFSFileResponse CreateHyDFSFileResponse
 			if err := json.Unmarshal(message.Payload, &createHyDFSFileResponse); err != nil {
-				fmt.Printf("ack unmarshal error: %v", err)
+				log.Printf("ack unmarshal error: %v", err)
 				continue
 			}
 			if createHyDFSFileResponse.Ack == ACK {
@@ -690,7 +677,7 @@ func createOrAppendHyDFSFile(localfilename string, hyDFSfilename string, create 
 		for _, message := range all {
 			var appendHyDFSFileResponse AppendHyDFSFileResponse
 			if err := json.Unmarshal(message.Payload, &appendHyDFSFileResponse); err != nil {
-				fmt.Printf("ack unmarshal error: %v", err)
+				log.Printf("ack unmarshal error: %v", err)
 				continue
 			}
 			if appendHyDFSFileResponse.Ack == ACK {
@@ -757,14 +744,14 @@ func getHyDFSFile(hyDFSfilename string, localfilename string) bool {
 			for _, fp := range ghfr.HyDFSFiles[hyDFSfilename].Chunks {
 				data, err := DecodeBase64ToBytes(fp.DataB64)
 				if err != nil {
-					fmt.Printf("file decode error: %v", err)
+					log.Printf("file decode error: %v", err)
 					return false
 				}
 				full = append(full, data...)
 			}
 
 			if err := os.WriteFile(localfilename, full, 0644); err != nil {
-				fmt.Printf("failed to write file: %v\n", err)
+				log.Printf("failed to write file: %v\n", err)
 				return false
 			}
 			return true
@@ -816,7 +803,7 @@ func handleNodeFail(m Member, membershipList map[string]Member) {
 		// Get primary files from predecessor (this should technically already be in self)
 		files, err := getFilesFromTarget(predecessor, "", Primary)
 		if err != nil {
-			fmt.Printf("get files from target error: %v", err)
+			log.Printf("get files from target error: %v", err)
 			return
 		}
 
@@ -829,12 +816,12 @@ func handleNodeFail(m Member, membershipList map[string]Member) {
 			for _, chunk := range hyDFSFile.Chunks {
 				data, err := DecodeBase64ToBytes(chunk.DataB64)
 				if err != nil {
-					fmt.Printf("file decode error: %v", err)
+					log.Printf("file decode error: %v", err)
 					return
 				}
 				targetPath := filepath.Join("hydfs", GetHyDFSCompliantFilename(filename)+"_"+chunk.ID)
 				if err := os.WriteFile(targetPath, data, 0644); err != nil {
-					fmt.Printf("failed to write file: %v\n", err)
+					log.Printf("failed to write file: %v\n", err)
 					return
 				}
 				chunks = append(chunks, File{
@@ -852,7 +839,7 @@ func handleNodeFail(m Member, membershipList map[string]Member) {
 		// Get primary files from predecessor2
 		files2, err := getFilesFromTarget(predecessor2, "", Primary)
 		if err != nil {
-			fmt.Printf("get files from target error: %v", err)
+			log.Printf("get files from target error: %v", err)
 			return
 		}
 
@@ -865,12 +852,12 @@ func handleNodeFail(m Member, membershipList map[string]Member) {
 			for _, chunk := range hyDFSFile.Chunks {
 				data, err := DecodeBase64ToBytes(chunk.DataB64)
 				if err != nil {
-					fmt.Printf("file decode error: %v", err)
+					log.Printf("file decode error: %v", err)
 					return
 				}
 				targetPath := filepath.Join("hydfs", GetHyDFSCompliantFilename(filename)+"_"+chunk.ID)
 				if err := os.WriteFile(targetPath, data, 0644); err != nil {
-					fmt.Printf("failed to write file: %v\n", err)
+					log.Printf("failed to write file: %v\n", err)
 					return
 				}
 				chunks = append(chunks, File{
@@ -889,7 +876,7 @@ func handleNodeFail(m Member, membershipList map[string]Member) {
 		// Get primary files from predecessor2
 		files2, err := getFilesFromTarget(predecessor2, "", Primary)
 		if err != nil {
-			fmt.Printf("get files from target error: %v", err)
+			log.Printf("get files from target error: %v", err)
 			return
 		}
 
@@ -902,12 +889,12 @@ func handleNodeFail(m Member, membershipList map[string]Member) {
 			for _, chunk := range hyDFSFile.Chunks {
 				data, err := DecodeBase64ToBytes(chunk.DataB64)
 				if err != nil {
-					fmt.Printf("file decode error: %v", err)
+					log.Printf("file decode error: %v", err)
 					return
 				}
 				targetPath := filepath.Join("hydfs", GetHyDFSCompliantFilename(filename)+"_"+chunk.ID)
 				if err := os.WriteFile(targetPath, data, 0644); err != nil {
-					fmt.Printf("failed to write file: %v\n", err)
+					log.Printf("failed to write file: %v\n", err)
 					return
 				}
 				chunks = append(chunks, File{
@@ -926,7 +913,7 @@ func handleNodeFail(m Member, membershipList map[string]Member) {
 		// Get all files from successor
 		files, err := getFilesFromTarget(successor, "", All)
 		if err != nil {
-			fmt.Printf("get files from target error: %v", err)
+			log.Printf("get files from target error: %v", err)
 			return
 		}
 
@@ -944,12 +931,12 @@ func handleNodeFail(m Member, membershipList map[string]Member) {
 			for _, chunk := range hyDFSFile.Chunks {
 				data, err := DecodeBase64ToBytes(chunk.DataB64)
 				if err != nil {
-					fmt.Printf("file decode error: %v", err)
+					log.Printf("file decode error: %v", err)
 					return
 				}
 				targetPath := filepath.Join("hydfs", GetHyDFSCompliantFilename(filename)+"_"+chunk.ID)
 				if err := os.WriteFile(targetPath, data, 0644); err != nil {
-					fmt.Printf("failed to write file: %v\n", err)
+					log.Printf("failed to write file: %v\n", err)
 					return
 				}
 				chunks = append(chunks, File{
@@ -975,12 +962,12 @@ func merge(hyDFSFile string, membershipList map[string]Member, mergeType MergeTy
 
 	metaFiles, err := getFilesFromTarget(predecessor, "", Meta)
 	if err != nil {
-		fmt.Printf("get files from target error: %v", err)
+		log.Printf("get files from target error: %v", err)
 		return
 	}
 	metaFiles2, err := getFilesFromTarget(predecessor2, "", Meta)
 	if err != nil {
-		fmt.Printf("get files from target error: %v", err)
+		log.Printf("get files from target error: %v", err)
 		return
 	}
 
@@ -1027,7 +1014,7 @@ func merge(hyDFSFile string, membershipList map[string]Member, mergeType MergeTy
 			}
 			hyDFSFiles, err := getFilesFromTarget(predecessor, filename, One)
 			if err != nil {
-				fmt.Printf("get files from target error: %v", err)
+				log.Printf("get files from target error: %v", err)
 				return
 			}
 			hyDFSFile := hyDFSFiles[filename]
@@ -1035,12 +1022,12 @@ func merge(hyDFSFile string, membershipList map[string]Member, mergeType MergeTy
 			for _, chunk := range hyDFSFile.Chunks {
 				data, err := DecodeBase64ToBytes(chunk.DataB64)
 				if err != nil {
-					fmt.Printf("file decode error: %v", err)
+					log.Printf("file decode error: %v", err)
 					return
 				}
 				targetPath := filepath.Join("hydfs", GetHyDFSCompliantFilename(filename)+"_"+chunk.ID)
 				if err := os.WriteFile(targetPath, data, 0644); err != nil {
-					fmt.Printf("failed to write file: %v\n", err)
+					log.Printf("failed to write file: %v\n", err)
 					return
 				}
 				chunks = append(chunks, File{
@@ -1061,7 +1048,7 @@ func merge(hyDFSFile string, membershipList map[string]Member, mergeType MergeTy
 			}
 			hyDFSFiles, err := getFilesFromTarget(predecessor2, filename, One)
 			if err != nil {
-				fmt.Printf("get files from target error: %v", err)
+				log.Printf("get files from target error: %v", err)
 				return
 			}
 			hyDFSFile := hyDFSFiles[filename]
@@ -1069,12 +1056,12 @@ func merge(hyDFSFile string, membershipList map[string]Member, mergeType MergeTy
 			for _, chunk := range hyDFSFile.Chunks {
 				data, err := DecodeBase64ToBytes(chunk.DataB64)
 				if err != nil {
-					fmt.Printf("file decode error: %v", err)
+					log.Printf("file decode error: %v", err)
 					return
 				}
 				targetPath := filepath.Join("hydfs", GetHyDFSCompliantFilename(filename)+"_"+chunk.ID)
 				if err := os.WriteFile(targetPath, data, 0644); err != nil {
-					fmt.Printf("failed to write file: %v\n", err)
+					log.Printf("failed to write file: %v\n", err)
 					return
 				}
 				chunks = append(chunks, File{
@@ -1108,13 +1095,13 @@ func merge(hyDFSFile string, membershipList map[string]Member, mergeType MergeTy
 			if inMeta {
 				hyDFSFiles, err = getFilesFromTarget(predecessor, hyDFSFile, One)
 				if err != nil {
-					fmt.Printf("get files from target error: %v", err)
+					log.Printf("get files from target error: %v", err)
 					return
 				}
 			} else {
 				hyDFSFiles, err = getFilesFromTarget(predecessor2, hyDFSFile, One)
 				if err != nil {
-					fmt.Printf("get files from target error: %v", err)
+					log.Printf("get files from target error: %v", err)
 					return
 				}
 			}
@@ -1123,12 +1110,12 @@ func merge(hyDFSFile string, membershipList map[string]Member, mergeType MergeTy
 			for _, chunk := range hyDFSFile.Chunks {
 				data, err := DecodeBase64ToBytes(chunk.DataB64)
 				if err != nil {
-					fmt.Printf("file decode error: %v", err)
+					log.Printf("file decode error: %v", err)
 					return
 				}
 				targetPath := filepath.Join("hydfs", GetHyDFSCompliantFilename(hyDFSFile.Filename)+"_"+chunk.ID)
 				if err := os.WriteFile(targetPath, data, 0644); err != nil {
-					fmt.Printf("failed to write file: %v\n", err)
+					log.Printf("failed to write file: %v\n", err)
 					return
 				}
 				chunks = append(chunks, File{
@@ -1150,30 +1137,25 @@ func merge(hyDFSFile string, membershipList map[string]Member, mergeType MergeTy
 }
 
 func main() {
-	f, err := os.OpenFile("machine.log", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
-	if err != nil {
-		fmt.Printf("log file open error: %v", err)
-		return
-	}
-	defer f.Close()
-	log.SetOutput(f)
-
 	// Erase previous hydfs files and make dir
 	os.RemoveAll("hydfs")
 	os.Mkdir("hydfs", 0755)
 
 	// Get self hostname
-	hostname, err := os.Hostname()
-	if err != nil {
-		fmt.Printf("get hostname error: %v", err)
-		return
-	}
-	selfHost = hostname
+	conn, _ := net.Dial("udp", "8.8.8.8:80")
+	defer conn.Close()
+	localAddr := conn.LocalAddr().(*net.UDPAddr)
+	selfHost = localAddr.IP.String()
+
+	// Get self port from cmd line args
+	port := flag.Int("port", 1234, "self port")
+	flag.Parse()
+	selfPort = *port
 
 	// Add self to membership list
 	self := Member{
 		IP:        selfHost,
-		Port:      SelfPort,
+		Port:      selfPort,
 		Timestamp: GetUUID(), // unique
 		Heartbeat: 0,
 		Status:    Alive,
@@ -1182,34 +1164,44 @@ func main() {
 	self.RingID = GetRingId(KeyFor(self))
 	MembershipList.Store(selfId, self)
 
-	// Listen for UDP messages
-	listenAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf(":%d", SelfPort))
+	// Setup logging
+	logFileName := fmt.Sprintf("machine.%s.%d.log", selfHost, selfPort)
+	f, err := os.OpenFile(logFileName, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	if err != nil {
-		fmt.Printf("resolve listenAddr error: %v", err)
+		log.Printf("log file open error: %v", err)
+		return
+	}
+	defer f.Close()
+	log.SetOutput(f)
+
+	// Listen for UDP messages
+	listenAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf(":%d", selfPort))
+	if err != nil {
+		log.Printf("resolve listenAddr error: %v", err)
 		return
 	}
 	udpConn, err = net.ListenUDP("udp", listenAddr)
 	if err != nil {
-		fmt.Printf("udp error: %v", err)
+		log.Printf("udp error: %v", err)
 	}
 	defer udpConn.Close()
 
 	go listenUDP()
 
 	// Listen for TCP messages
-	tcpLn, err := net.Listen("tcp", fmt.Sprintf(":%d", SelfPort))
+	tcpLn, err := net.Listen("tcp", fmt.Sprintf(":%d", selfPort))
 	if err != nil {
-		fmt.Printf("tcp error: %v", err)
+		log.Printf("tcp error: %v", err)
 		return
 	}
 
 	go listenTCP(tcpLn)
 
 	// Send join to introducer iff we are not the introducer
-	if !(selfHost == IntroducerHost && SelfPort == IntroducerPort) {
+	if !(selfHost == IntroducerHost && selfPort == IntroducerPort) {
 		introducerAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", IntroducerHost, IntroducerPort))
 		if err != nil {
-			fmt.Printf("resolve introducerAddr error: %v", err)
+			log.Printf("resolve introducerAddr error: %v", err)
 		}
 		initial := Message{
 			MessageType: JoinReq,
@@ -1227,7 +1219,7 @@ func main() {
 		handleCommand(line)
 	}
 	if err := scanner.Err(); err != nil {
-		fmt.Printf("stdin error: %v\n", err)
+		log.Printf("stdin error: %v\n", err)
 	}
 }
 
@@ -1360,7 +1352,7 @@ func handleCommand(line string) {
 	case "liststore":
 		HyDFSFiles.Range(func(k, v any) bool {
 			filename := k.(string)
-			fmt.Printf("Filename: %s | RingID: %20d", filename, GetRingId(filename))
+			fmt.Printf("Filename: %s | RingID: %20d\n", filename, GetRingId(filename))
 			return true
 		})
 
@@ -1372,12 +1364,12 @@ func handleCommand(line string) {
 		targetAddr := fields[1]
 		targetIP, targetPortStr, err := net.SplitHostPort(targetAddr)
 		if err != nil {
-			fmt.Printf("invalid target address: %v\n", err)
+			fmt.Println("Usage: getfromreplica <VMaddress> <HyDFSFilename> <localfilename>")
 			return
 		}
 		targetPort, err := strconv.Atoi(targetPortStr)
 		if err != nil {
-			fmt.Printf("invalid target port: %v\n", err)
+			fmt.Println("Usage: getfromreplica <VMaddress> <HyDFSFilename> <localfilename>")
 			return
 		}
 		hyDFSfilename := fields[2]
@@ -1390,27 +1382,27 @@ func handleCommand(line string) {
 
 		files, err := getFilesFromTarget(target, hyDFSfilename, One)
 		if err != nil {
-			fmt.Printf("get files from target error: %v", err)
+			log.Printf("get files from target error: %v", err)
 			return
 		}
 
 		hyDFSFile, ok := files[hyDFSfilename]
 		if !ok {
-			fmt.Printf("file %s not found on replica %s\n", hyDFSfilename, targetAddr)
+			fmt.Printf("File %s not found on replica %s\n", hyDFSfilename, targetAddr)
 			return
 		}
 		var full []byte
 		for _, fp := range hyDFSFile.Chunks {
 			data, err := DecodeBase64ToBytes(fp.DataB64)
 			if err != nil {
-				fmt.Printf("file decode error: %v", err)
+				log.Printf("file decode error: %v", err)
 				return
 			}
 			full = append(full, data...)
 		}
 
 		if err := os.WriteFile(localfilename, full, 0644); err != nil {
-			fmt.Printf("failed to write file: %v\n", err)
+			log.Printf("failed to write file: %v\n", err)
 			return
 		}
 		fmt.Printf("Retrieved HyDFS file %s from replica %s to %s!\n", hyDFSfilename, targetAddr, localfilename)
@@ -1448,7 +1440,7 @@ func handleCommand(line string) {
 
 			targetAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", targetIP, targetPort))
 			if err != nil {
-				fmt.Printf("resolve targetAddr error: %v", err)
+				log.Printf("resolve targetAddr error: %v", err)
 				return
 			}
 			payloadBytes, _ := json.Marshal(MultiAppendRequest{

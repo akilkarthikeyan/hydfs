@@ -118,8 +118,7 @@ type GetHyDFSFilesResponse struct {
 }
 
 const (
-	SelfPort       = 1234
-	IntroducerHost = "fa25-cs425-9501.cs.illinois.edu"
+	IntroducerHost = "192.168.0.193"
 	IntroducerPort = 1234
 	Tfail          = 5
 	Tcleanup       = 5
