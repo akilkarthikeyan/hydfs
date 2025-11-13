@@ -1,4 +1,4 @@
-# HyDFS - test
+# HyDFS
 
 ## HyDFS Overview
 
@@ -52,6 +52,7 @@ go run .
 | `liststore` | List files stored on this node. |
 | `getfromreplica <nodeaddress> <HyDFSFilename> <localfilename>` | Get a file from a specific replica. |
 | `multiappend <HyDFSfilename> <nodei> <nodej> ... <localfilenamei> <localfilenamej> ...` | Simultaneously append from multiple node. |
+
 
 
 
