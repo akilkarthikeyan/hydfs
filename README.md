@@ -2,7 +2,7 @@
 
 ## HyDFS Overview
 
-HyDFS was built for MP3 at UIUC for CS425 Distributed Systems. HyDFS is a distributed file system built on top of a gossip-based failure detector (gossip round = 1s, K = 3, T<sub>fail</sub> = 5s, T<sub>cleanup</sub> = 5s). It uses **consistent hashing (SHA1, 64-bit)** to organize nodes in a ring of size `2^64` and has a **replication factor of 3** to ensure fault tolerance, allowing up to **two simultaneous node failures**.
+HyDFS is a distributed file system built on top of a gossip-based failure detector (gossip round = 1s, K = 3, T<sub>fail</sub> = 5s, T<sub>cleanup</sub> = 5s). It uses **consistent hashing (SHA1, 64-bit)** to organize nodes in a ring of size `2^64` and has a **replication factor of 3** to ensure fault tolerance, allowing up to **two simultaneous node failures**.
 
 ### Communication & Storage
 - **UDP** is used for control messages, while **TCP** (with Base64-encoded file data) is used to handle file transfers.  
@@ -52,6 +52,7 @@ go run .
 | `liststore` | List files stored on this node. |
 | `getfromreplica <nodeaddress> <HyDFSFilename> <localfilename>` | Get a file from a specific replica. |
 | `multiappend <HyDFSfilename> <nodei> <nodej> ... <localfilenamei> <localfilenamej> ...` | Simultaneously append from multiple node. |
+
 
 
 
